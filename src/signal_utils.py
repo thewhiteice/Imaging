@@ -1,4 +1,5 @@
 import numpy as np
+from numba import njit, prange
 from scipy import signal
 from scipy.spatial.distance import cdist
 
@@ -41,7 +42,7 @@ def sinc_interp(signal: np.ndarray, fs: float, t: np.ndarray, L=8, beta=6.0):
     t = np.asarray(t)
     shape = t.shape
     t_flat = t.ravel()
-    N = len(signal) # N = signal.shape[-1]
+    N = len(signal)  # N = signal.shape[-1]
 
     n0 = np.round(t_flat * fs).astype(int)
     offsets = np.arange(-L, L + 1)
@@ -59,6 +60,62 @@ def sinc_interp(signal: np.ndarray, fs: float, t: np.ndarray, L=8, beta=6.0):
 
     y_flat = np.sum(x * s * w, axis=1)
     return y_flat.reshape(shape)
+
+
+@njit(parallel=True, cache=True, boundscheck=False)
+def __sinc_interp_kernel(signal, fs, t_flat, w, L, out):
+    """
+    sinc 插值函数 Numba高性能内核
+    """
+    n_rx, N = signal.shape
+    _, M = t_flat.shape
+    K = 2 * L + 1
+
+    for rx_idx in prange(n_rx):
+        zero = signal[rx_idx, 0] - signal[rx_idx, 0]
+        for t_idx in range(M):
+            tr = t_flat[rx_idx, t_idx]
+            n0 = round(tr * fs)
+            acc = zero
+            for k in range(K):
+                i = n0 - L + k
+                i_m = -i if i < 0 else i
+                i_m = 2 * N - 2 - i_m if i_m >= N else i_m
+                u = tr * fs - i
+                acc += signal[rx_idx, i_m] * np.sinc(u) * w[k]
+            out[rx_idx, t_idx] = acc
+
+
+def sinc_interp_v(signal: np.ndarray, fs: float, t: np.ndarray, L=8, beta=6.0):
+    """
+    sinc 插值函数
+    使用 Kaiser 窗截断的 sinc 插值
+    超出范围设计为镜像延拓
+
+    输入:
+        signal  原始信号序列 shape(rx, N)
+        fs      signal 信号采样率
+        t       插值时刻 shape(rx, L2, L1)
+        L       Kaiser 窗半长   默认8
+        beta    Kaiser 窗参数   默认6.0
+    输出:
+        y       插值点处值 shape(rx, L2, L1)
+    """
+
+    n_rx, _ = signal.shape
+    L2, L1 = t.shape[1], t.shape[2]
+    M = L2 * L1
+    t_2d = np.ascontiguousarray(t.reshape(n_rx, M))  # (n_rx, M)
+
+    # Kaiser 窗
+    w = np.kaiser(2 * L + 1, beta)
+
+    # Numba加速的插值点生成
+    out_type = signal.dtype
+    y = np.empty((n_rx, M), dtype=out_type)
+    __sinc_interp_kernel(signal, fs, t_2d, w, L, y)
+
+    return y.reshape(n_rx, L2, L1)
 
 
 def iq_demod(sig, time, fc, fs, order=4):
@@ -190,9 +247,9 @@ def main():
     plt.grid(True)
 
     # ===== 测试 DAS FMC 延迟叠加 =====
-    f = 1.0e6  # 频率 Hz
+    fc = 1.0e6  # 频率 Hz
     cp = 6260  # 纵波声速 m/s
-    dx = cp / (f * 4)  # 空间分辨率 1/4波长
+    dx = cp / (fc * 8)  # 空间分辨率 1/4波长
 
     Lx = 30.0e-3  # 横向空间距离
     Ly = 30.0e-3  # 纵向空间距离
@@ -200,11 +257,18 @@ def main():
     Lx_array = np.arange(0, Lx, dx)
     Ly_array = np.arange(0, Ly, dx)
 
-    n_sensor = 8
-    sensor_pos_x = np.arange(-n_sensor/2, n_sensor/2) * dx + Lx / 2.0   # shape (n, )
-    sensor_pos_y = np.zeros(len(sensor_pos_x))  # shape (n,)
-    sensor_pos = np.column_stack((sensor_pos_x, sensor_pos_y))  # shape(n, 2)
-    dist = das_trace(Lx_array, Ly_array, sensor_pos)  # shape (n, L2, L1)
+    n_elements = 8
+    # 传感器位置
+    lmb = cp / fc  # 波长 m
+    pitch = 0.5 * lmb  # 阵元间距 m (半波长即可)
+    element_pos = np.column_stack(
+        (
+            np.arange(n_elements) * pitch + (Lx / 2 - (n_elements - 1) * pitch / 2),
+            np.zeros(n_elements),
+        )
+    )  # shape(n, 2)
+
+    dist = das_trace(Lx_array, Ly_array, element_pos)  # shape (n, L2, L1)
 
     # 取第一个阵元激发 全部阵元接收
     dist = dist / cp
