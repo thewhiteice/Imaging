@@ -2,8 +2,8 @@
 % 材料定义
 SOLID_LAYERS = [
     % struct("name","Cu", "cp",4710, "csh",2260, "th",15e-3, "rho",8900);
+    % struct("name","Al", "cp",6260, "csh",3080, "th",15e-3, "rho",2700);
     struct("name","Fe", "cp",6100, "csh",3300, "th",30.0e-3, "rho",7800);
-    %struct("name","Al", "cp",6260, "csh",3080, "th",15e-3, "rho",2700);
 ];
 
 air_th = 0.1 * sum([SOLID_LAYERS.th]);
@@ -26,20 +26,22 @@ amp = 1e6;
 c_values = [[SOLID_LAYERS.cp], [SOLID_LAYERS.csh]];
 c_max = max(c_values); % 最大固体纵/横波声速
 c_min = min(c_values); % 最小固体纵/横波声速
-lambda_min = c_min / f0; % 最小波长
+lmb_min = c_min / f0; % 最小波长
 
 rho_values = [SOLID_LAYERS.rho];
 rho_min = min(rho_values); %最小固体密度
 
 % 换能器位置定义 
 % 纵坐标会被实际修改
-n_sensors = 8;
-dx_sensors = lambda_min / 4;
+n_sensors = 32;
+pitch = lmb_min / 2;
 
-sensor_x = linspace(0, dx_sensors*n_sensors, n_sensors);
-sensor_x = sensor_x + Lx/2;
+sensor_x = linspace(0, pitch*n_sensors, n_sensors);
+sensor_x = sensor_x + Lx/2 - (n_sensors - 1)*pitch/2;
 sensor_y = air_th * ones(1, n_sensors);
 sensor_positions = [sensor_x(:), sensor_y(:)];
+
+rx_idx = round(n_sensors/2);
 
 % 缺陷位置定义
 n_points = 0;
@@ -52,7 +54,7 @@ Lx_p = Lx;
 Ly_p = sum([SOLID_LAYERS.th]);
 
 point_x = linspace(0.25*Lx_p, 0.75*Lx_p, n_points);
-point_y = linspace(0.5*Ly_p, 0.75*Ly_p, n_points);
+point_y = linspace(0.25*Ly_p, 0.75*Ly_p, n_points);
 
 POINT = [
     struct("name", "Point", "cp", 1000, "csh", 1000, "rho", 100)
@@ -92,8 +94,8 @@ sensor_pos_save(:,2) = sensor_pos_save(:,2) - air_th;   % 平移到固体顶面�
 %% ===== 仿真网格设置 =====
 kgrid=kWaveGrid(Nx,dx,Ny,dy);
 
-t_end = 2 * sqrt(Lx_p^2 + Ly_p^2) / c_min;
-% t_end = 0.5 * sum([SOLID_LAYERS.th] ./ [SOLID_LAYERS.cp]);
+% t_end = 2 * sqrt(Lx_p^2 + Ly_p^2) / c_min;
+t_end = 0.7 * sum([SOLID_LAYERS.th] ./ [SOLID_LAYERS.cp]);
 kgrid.makeTime(c_max, cfl, t_end);
 
 t_axis = kgrid.t_array;
@@ -208,12 +210,12 @@ ylabel('z grid points');
 figure;
 hold on;
 for i = 1:size(sensor_data.p, 1)
-    plot(t_axis, sensor_data.p(i,:), 'DisplayName', sprintf('传感器 %d', i));
+    plot(t_axis, sensor_data.p(i,:), 'LineWidth',1.5, 'DisplayName', sprintf('传感器 %d', i));
 end
 signal_padded = [signal(:); zeros(length(t_axis)-length(signal), 1)];
-plot(t_axis, signal_padded, '--','DisplayName','原始信号', ...
+plot(t_axis, signal_padded, '--','LineWidth',1.5,'DisplayName','原始信号', ...
     'MarkerIndices', 1:10:length(signal_padded));
-legend show;
+% legend show;
 xlabel('时间 (s)');
 title('p');
 grid on;
@@ -221,12 +223,14 @@ hold off;
 
 figure;
 hold on;
+sensor_uy_norm = sensor_data.uy ./ max(sensor_data.uy(:));
+signal_padded_norm = signal_padded./ max(signal_padded(:));
 for i = 1:size(sensor_data.uy, 1)
-    plot(t_axis, sensor_data.uy(i,:), 'DisplayName', sprintf('传感器 %d', i));
+    plot(t_axis, sensor_uy_norm(i,:), 'LineWidth',1.5, 'DisplayName', sprintf('传感器 %d', i));
 end
-% signal_padded = [signal(:); zeros(length(t_axis)-length(signal), 1)];
-% plot(t_axis, signal_padded, '--','DisplayName','原始信号', ...'MarkerIndices', 1:10:length(signal_padded));
-legend show;
+plot(t_axis, signal_padded, '--', 'LineWidth',1.5, 'DisplayName','原始信号', ...
+    'MarkerIndices', 1:10:length(signal_padded));
+% legend show;
 xlabel('时间 (s)');
 ylabel('位移 uy(m) ');
 grid on;
@@ -267,7 +271,7 @@ hold off
 title('单边幅度谱');
 xlabel('频率 (Hz)');
 ylabel('幅度');
-legend show; 
+% legend show; 
 grid on;
 xlim([0 10.0e6]);       % 限制显示范围到奈奎斯特频率
 
@@ -297,7 +301,7 @@ end
 params.Lx = Lx;                         % 仿真区域
 params.Ly = sum([SOLID_LAYERS.th]);     % 仿真区域
 params.f0 = f0;                         % 源频率
-params.lambda = lambda_min;             % 最小波长
+params.lambda = lmb_min;             % 最小波长
 params.cp = [SOLID_LAYERS.cp];          % 纵波序列
 params.t_axis = t_axis;                 % 仿真时间
 params.sensor_data = sensor_data.uy;    % 换能器信号
